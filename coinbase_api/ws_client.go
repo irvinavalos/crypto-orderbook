@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gorilla/websocket"
+	ob "github.com/irvinavalos/crypto-orderbook/orderbook"
 )
 
 const WebSocketURL = "wss://advanced-trade-ws.coinbase.com"
@@ -48,6 +49,8 @@ func StartCoinbaseWS() {
 
 	log.Printf("Subscribed to [%s] level2\n", subscriptionMessage.stringProductIDs())
 
+	orderbook := ob.NewOrderbook()
+
 	var coinbaseMessage *CoinbaseMessage
 
 	for {
@@ -56,6 +59,14 @@ func StartCoinbaseWS() {
 			return
 		}
 
-		log.Println(coinbaseMessage)
+		updates := coinbaseMessage.BookUpdates()
+
+		for _, update := range updates {
+			orderbook.ApplyUpdate(update)
+		}
+
+		bestBid := orderbook.BestBid()
+		bestOffer := orderbook.BestOffer()
+		log.Printf("BestBid = %v \t BestOffer = %v\n", bestBid, bestOffer)
 	}
 }

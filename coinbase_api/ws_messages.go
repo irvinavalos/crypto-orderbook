@@ -3,6 +3,8 @@ package coinbase_api
 import (
 	"strconv"
 	"strings"
+
+	"github.com/irvinavalos/crypto-orderbook/orderbook"
 )
 
 func stringToInt64(s string) int64 {
@@ -53,11 +55,11 @@ type Update struct {
 	NewQuantity string `json:"new_quantity"`
 }
 
-func (u *Update) getPrice() int64 {
+func (u *Update) price() int64 {
 	return stringToInt64(u.PriceLevel)
 }
 
-func (u *Update) getSize() int64 {
+func (u *Update) volume() int64 {
 	return stringToInt64(u.NewQuantity)
 }
 
@@ -72,4 +74,35 @@ type CoinbaseMessage struct {
 	Timestamp      string  `json:"timestamp"`
 	SequenceNumber int     `json:"sequence_num"`
 	Events         []Event `json:"events"`
+}
+
+func (cm *CoinbaseMessage) BookUpdates() []orderbook.BookUpdate {
+	updates := make([]orderbook.BookUpdate, 0, len(cm.Events)*10)
+
+	for _, event := range cm.Events {
+		for _, update := range event.Updates {
+			updates = append(updates, toBookUpdate(update))
+		}
+	}
+
+	return updates
+}
+
+func toBookUpdate(u Update) orderbook.BookUpdate {
+	var side orderbook.Side
+
+	if u.Side == "bid" {
+		side = orderbook.Bid
+	} else {
+		side = orderbook.Offer
+	}
+
+	price := orderbook.Price(u.price())
+	volume := orderbook.Volume(u.volume())
+
+	return orderbook.BookUpdate{
+		Side:   side,
+		Price:  price,
+		Volume: volume,
+	}
 }
