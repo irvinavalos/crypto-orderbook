@@ -1,115 +1,157 @@
 package orderbook
 
-type Price int64
-type Volume int64
+import "sync"
 
+type Price int64
+type Quantity int64
 type Side string
 
 const (
-	Bid   Side = "bid"
-	Offer Side = "offer"
+	Bid Side = "bid"
+	Ask Side = "ask"
 )
 
-type PriceList map[Price]Volume
+type PriceLevels map[Price]Quantity
+
+type OrderbookUpdate struct {
+	Side     Side
+	Price    Price
+	Quantity Quantity
+}
+
+type OrderbookUpdates []OrderbookUpdate
 
 type Orderbook struct {
-	Bids      PriceList
-	Offers    PriceList
-	bestBid   Price
-	bestOffer Price
+	Bids    PriceLevels
+	Asks    PriceLevels
+	bestBid Price
+	bestAsk Price
+	mu      sync.RWMutex
 }
 
 func NewOrderbook() *Orderbook {
 	return &Orderbook{
-		Bids:      make(PriceList),
-		Offers:    make(PriceList),
-		bestBid:   0,
-		bestOffer: 0,
+		Bids:    PriceLevels{},
+		Asks:    PriceLevels{},
+		bestBid: 0,
+		bestAsk: 0,
 	}
 }
 
-func (ob *Orderbook) BestBid() Price {
-	return ob.bestBid
+func (ob *Orderbook) BestBid() (Price, Quantity, bool) {
+	if len(ob.Bids) == 0 {
+		return 0, 0, false
+	}
+	return ob.bestBid, ob.Bids[ob.bestBid], true
 }
 
-func (ob *Orderbook) BestOffer() Price {
-	return ob.bestOffer
+func (ob *Orderbook) BestAsk() (Price, Quantity, bool) {
+	if len(ob.Asks) == 0 {
+		return 0, 0, false
+	}
+	return ob.bestAsk, ob.Asks[ob.bestAsk], true
 }
 
-func (ob *Orderbook) ApplyUpdate(update BookUpdate) {
-	if update.Side == Bid {
-		updateBids(ob, update)
-	} else {
-		updateOffers(ob, update)
+func (ob *Orderbook) ApplyUpdate(ou OrderbookUpdate) {
+	if ou.Price <= 0 {
+		return
+	}
+	if ou.Quantity < 0 {
+		return
+	}
+	ob.mu.Lock()
+	defer ob.mu.Unlock()
+
+	var best Price
+
+	switch ou.Side {
+	case Bid:
+		best = ob.bestBid
+	case Ask:
+		best = ob.bestAsk
+	}
+
+	switch ou.Quantity {
+	case 0:
+		ob.removeOrder(ou.Price, best, ou.Side)
+	default:
+		ob.addOrder(ou.Price, ou.Quantity, ou.Side)
 	}
 }
 
-func updateBids(ob *Orderbook, u BookUpdate) bool {
-	oldBestBid := ob.bestBid
-	price := u.Price
-	volume := u.Volume
-
-	if volume == 0 {
-		delete(ob.Bids, price)
-		if price == oldBestBid {
-			ob.bestBid = findBestBid(ob.Bids)
-		}
-	} else {
-		ob.Bids[price] = volume
+func (ob *Orderbook) addOrder(price Price, quantity Quantity, side Side) {
+	switch side {
+	case Bid:
+		ob.Bids[price] = quantity
 		if price > ob.bestBid {
 			ob.bestBid = price
 		}
+	case Ask:
+		ob.Asks[price] = quantity
+		if ob.bestAsk == 0 || price < ob.bestAsk {
+			ob.bestAsk = price
+		}
 	}
-
-	return ob.bestBid != oldBestBid
 }
 
-func findBestBid(bids PriceList) Price {
-	var best Price
+func (ob *Orderbook) removeOrder(price Price, best Price, side Side) {
+	switch side {
+	case Bid:
+		delete(ob.Bids, price)
+	case Ask:
+		delete(ob.Asks, price)
+	}
 
-	for price := range bids {
+	if price == best {
+		ob.updateBestBidOrOffer(side)
+	}
+}
+
+func (ob *Orderbook) updateBestBidOrOffer(side Side) {
+	switch side {
+	case Bid:
+		ob.bestBid = ob.findBestBid()
+	case Ask:
+		ob.bestAsk = ob.findBestOffer()
+	}
+}
+
+func (ob *Orderbook) findBestBid() Price {
+	var best Price
+	for price := range ob.Bids {
 		if price > best {
 			best = price
 		}
 	}
-
 	return best
 }
 
-func updateOffers(ob *Orderbook, u BookUpdate) bool {
-	oldBestOffer := ob.bestOffer
-	price := u.Price
-	volume := u.Volume
-
-	if volume == 0 {
-		delete(ob.Offers, price)
-		if price == oldBestOffer {
-			ob.bestOffer = findBestOffer(ob.Offers)
-		}
-	} else {
-		ob.Offers[price] = volume
-		if ob.bestOffer == 0 || price < ob.bestOffer {
-			ob.bestOffer = price
-		}
-	}
-
-	return ob.bestOffer != oldBestOffer
-}
-
-func findBestOffer(bids PriceList) Price {
+func (ob *Orderbook) findBestOffer() Price {
 	var best Price
-
-	for price := range bids {
+	for price := range ob.Asks {
 		if best == 0 || price < best {
 			best = price
 		}
 	}
-
 	return best
 }
 
-type BookUpdate struct {
-	Side   Side
-	Price  Price
-	Volume Volume
+func (ob *Orderbook) Spread() Price {
+	ob.mu.RLock()
+	defer ob.mu.RUnlock()
+
+	if ob.bestAsk == 0 || ob.bestBid == 0 {
+		return 0
+	}
+	return ob.bestAsk - ob.bestBid
+}
+
+func (ob *Orderbook) MidPoint() Price {
+	ob.mu.RLock()
+	defer ob.mu.RUnlock()
+
+	if ob.bestAsk == 0 || ob.bestBid == 0 {
+		return 0
+	}
+	return (ob.bestAsk + ob.bestBid) / 2
 }
