@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/irvinavalos/crypto-orderbook/orderbook"
+	ob "github.com/irvinavalos/crypto-orderbook/orderbook"
 )
 
 func stringToInt64(s string) int64 {
@@ -55,12 +55,32 @@ type Update struct {
 	NewQuantity string `json:"new_quantity"`
 }
 
-func (u *Update) price() int64 {
+func (u *Update) getPrice() int64 {
 	return stringToInt64(u.PriceLevel)
 }
 
-func (u *Update) volume() int64 {
+func (u *Update) getQuantity() int64 {
 	return stringToInt64(u.NewQuantity)
+}
+
+func (u *Update) getOrderbookUpdates() ob.OrderbookUpdate {
+	var side ob.Side
+
+	switch ob.Side(u.Side) {
+	case ob.Bid:
+		side = ob.Bid
+	case ob.Ask:
+		side = ob.Ask
+	}
+
+	price := ob.Price(u.getPrice())
+	volume := ob.Quantity(u.getQuantity())
+
+	return ob.OrderbookUpdate{
+		Side:     side,
+		Price:    price,
+		Quantity: volume,
+	}
 }
 
 type Event struct {
@@ -76,33 +96,14 @@ type CoinbaseMessage struct {
 	Events         []Event `json:"events"`
 }
 
-func (cm *CoinbaseMessage) BookUpdates() []orderbook.BookUpdate {
-	updates := make([]orderbook.BookUpdate, 0, len(cm.Events)*10)
+func (cm *CoinbaseMessage) OrderbookUpdates() ob.OrderbookUpdates {
+	updates := make(ob.OrderbookUpdates, 0, len(cm.Events)*10)
 
 	for _, event := range cm.Events {
 		for _, update := range event.Updates {
-			updates = append(updates, toBookUpdate(update))
+			updates = append(updates, update.getOrderbookUpdates())
 		}
 	}
 
 	return updates
-}
-
-func toBookUpdate(u Update) orderbook.BookUpdate {
-	var side orderbook.Side
-
-	if u.Side == "bid" {
-		side = orderbook.Bid
-	} else {
-		side = orderbook.Offer
-	}
-
-	price := orderbook.Price(u.price())
-	volume := orderbook.Volume(u.volume())
-
-	return orderbook.BookUpdate{
-		Side:   side,
-		Price:  price,
-		Volume: volume,
-	}
 }
